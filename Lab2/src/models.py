@@ -1,5 +1,4 @@
 from flask_sqlalchemy import SQLAlchemy
-
 db = SQLAlchemy()
 
 class Terms(db.Model):
@@ -8,7 +7,7 @@ class Terms(db.Model):
     terms_description = db.Column(db.String(50), nullable=False)
     terms_due_days = db.Column(db.Integer, nullable=False)
 
-class invoices(db.Model):
+class Invoices(db.Model):
     __tablename__ = "invoices"
     invoice_id = db.Column(db.Integer, primary_key=True)
     vendor_id = db.Column(db.Integer, nullable=False)
