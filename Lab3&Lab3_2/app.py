@@ -1,163 +1,106 @@
-from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
-from models import db, Terms, Invoices, Vendors
+from flask import Flask, jsonify, request
+from flask_restx import Api, Resource, reqparse
+from config import Config
+from models import db, Terms, Vendors
 from sqlalchemy import exc
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:Ramy2404@localhost:3306/ap'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+config = Config()
+app.config.from_object(config)
 db.init_app(app)
 
-# GET method for retrieving specific terms
-@app.get('/terms/<int:id>')
-def get_term(id):
-    t = db.session.query(Terms)\
-        .with_entities(Terms.terms_id, Terms.terms_description, Terms.terms_due_days)\
-        .filter(Terms.terms_id == id).first()
-    if t:
-        return jsonify(t._asdict())
-    return jsonify({'message': 'Term not found'}), 404
+# API Setup
+api = Api(app, version='1.0', title='Vendors API', description='Vendors Management API')
+api_ns = api.namespace("Reference", path='/apiv1', description="Reference Data")
 
-# GET method to retrieve all invoices with specific terms
-@app.get('/invoices/term/<int:term_id>')
-def get_invoices_term(term_id):
-    inv = db.session.query(Invoices, Terms)\
-        .join(Terms, Terms.terms_id == Invoices.terms_id)\
-        .with_entities(Invoices.invoice_number, Terms.terms_description)\
-        .filter(Invoices.terms_id == term_id).all()
-    lst = [v._asdict() for v in inv]
-    return jsonify(lst)
+# Parsers
+put_terms_parser = reqparse.RequestParser()
+put_terms_parser.add_argument('terms_description', type=str, required=True, help='Terms description is required')
+put_terms_parser.add_argument('terms_due_days', type=int, required=True, help='Terms due days is required')
 
-# POST method to add a new term
-@app.post('/terms')
-def post_terms():
-    try:
-        request_data = request.get_json()
-        t = Terms(
-            terms_description=request_data["terms_description"], 
-            terms_due_days=request_data["terms_due_days"]
-        )
-        db.session.add(t)
-        db.session.commit()
-        return jsonify({'message':'success'}), 201
-    except Exception as e:
-        print(e)
-        return jsonify({'message': 'Something went wrong!'}), 500
+vendor_parser = reqparse.RequestParser()
+vendor_parser.add_argument('vendor_name', type=str, required=True)
+vendor_parser.add_argument('vendor_address1', type=str)
+vendor_parser.add_argument('vendor_address2', type=str)
+vendor_parser.add_argument('vendor_city', type=str, required=True)
+vendor_parser.add_argument('vendor_state', type=str, required=True)
+vendor_parser.add_argument('vendor_zip_code', type=str, required=True)
+vendor_parser.add_argument('vendor_phone', type=str)
+vendor_parser.add_argument('vendor_contact_last_name', type=str)
+vendor_parser.add_argument('vendor_contact_first_name', type=str)
+vendor_parser.add_argument('default_terms_id', type=int, required=True)
+vendor_parser.add_argument('default_account_number', type=int, required=True)
 
-# PUT method to update term information
-@app.put('/terms/<string:des>')
-def put_terms(des):
-    request_data = request.get_json()
-    t = db.session.query(Terms).filter(Terms.terms_description == des).first()
-    if t:
-        t.terms_description = request_data["terms_description"]
-        t.terms_due_days = request_data["terms_due_days"]
-        try:
+@api_ns.route('/terms/<int:id>')
+class TermResource(Resource):
+    @api.doc('get_term')
+    def get(self, id):
+        term = Terms.query.get(id)
+        if term:
+            return {'terms_id': term.terms_id,
+                   'terms_description': term.terms_description,
+                   'terms_due_days': term.terms_due_days}
+        return {'message': 'Term not found'}, 404
+
+    @api.doc('update_term')
+    @api.expect(put_terms_parser)
+    def put(self, id):
+        args = put_terms_parser.parse_args()
+        term = Terms.query.get(id)
+        if term:
+            term.terms_description = args['terms_description']
+            term.terms_due_days = args['terms_due_days']
             db.session.commit()
-            return jsonify({'message':'Success'})
-        except exc.SQLAlchemyError as e:
-            return jsonify({'message': str(e.__cause__)})
-    else:
-        return jsonify({'message':'There is no record'}), 400
+            return {'message': 'Term updated successfully'}
+        return {'message': 'Term not found'}, 404
 
-# DELETE method to remove a term record
-@app.delete('/terms/<int:id>')
-def delete_terms(id):
-    t = db.session.query(Terms).filter(Terms.terms_id == id).first()
-    if t:
-        db.session.delete(t)
+@api_ns.route('/vendors')
+class VendorsResource(Resource):
+    @api.doc('list_vendors')
+    def get(self):
+        vendors = Vendors.query.all()
+        return {'vendors': [{'vendor_id': v.vendor_id, 'vendor_name': v.vendor_name} for v in vendors]}
+
+    @api.doc('create_vendor')
+    @api.expect(vendor_parser)
+    def post(self):
+        args = vendor_parser.parse_args()
         try:
+            vendor = Vendors(**args)
+            db.session.add(vendor)
             db.session.commit()
-            return jsonify({'message':'Success'})
+            return {'message': 'Vendor created successfully'}, 201
         except exc.SQLAlchemyError as e:
-            return jsonify({'message': str(e.__cause__)})
-    else:
-        return jsonify({'message':'There is no record'}), 400
+            db.session.rollback()
+            return {'error': str(e.__cause__)}, 500
 
-# GET method to retrieve all vendors
-@app.get('/vendors')
-def get_vendors():
-    vendors = db.session.query(Vendors).all()
-    vendor_list = []
-    for vendor in vendors:
-        vendor_dict = {
-            'vendor_id': vendor.vendor_id,
-            'vendor_name': vendor.vendor_name,
-            'vendor_address1': vendor.vendor_address1,
-            'vendor_address2': vendor.vendor_address2,
-            'vendor_city': vendor.vendor_city,
-            'vendor_state': vendor.vendor_state,
-            'vendor_zip_code': vendor.vendor_zip_code,
-            'vendor_phone': vendor.vendor_phone,
-            'vendor_contact_last_name': vendor.vendor_contact_last_name,
-            'vendor_contact_first_name': vendor.vendor_contact_first_name,
-            'default_terms_id': vendor.default_terms_id,
-            'default_account_number': vendor.default_account_number
-        }
-        vendor_list.append(vendor_dict)
-    return jsonify(vendor_list)
+@api_ns.route('/vendors/<int:vendor_id>')
+class VendorResource(Resource):
+    @api.doc('update_vendor')
+    @api.expect(vendor_parser)
+    def put(self, vendor_id):
+        vendor = Vendors.query.get(vendor_id)
+        if not vendor:
+            return {'message': 'Vendor not found'}, 404
+        
+        args = vendor_parser.parse_args()
+        try:
+            for key, value in args.items():
+                setattr(vendor, key, value)
+            db.session.commit()
+            return {'message': 'Vendor updated successfully'}
+        except exc.SQLAlchemyError as e:
+            db.session.rollback()
+            return {'error': str(e.__cause__)}, 500
 
-# POST method to add a new vendor
-@app.post('/vendors')
-def post_vendor():
-    if not request.is_json:
-        return jsonify({"message": "Missing JSON in request"}), 415
-    try:
-        request_data = request.get_json()
-        vendor = Vendors(
-            vendor_name=request_data['vendor_name'],
-            vendor_address1=request_data['vendor_address1'],
-            vendor_address2=request_data.get('vendor_address2'),  # Optional
-            vendor_city=request_data['vendor_city'],
-            vendor_state=request_data['vendor_state'],
-            vendor_zip_code=request_data['vendor_zip_code'],
-            vendor_phone=request_data.get('vendor_phone'),  # Optional
-            vendor_contact_last_name=request_data.get('vendor_contact_last_name'),  # Optional
-            vendor_contact_first_name=request_data.get('vendor_contact_first_name'),  # Optional
-            default_terms_id=request_data['default_terms_id'],
-            default_account_number=request_data['default_account_number']
-        )
-        db.session.add(vendor)
-        db.session.commit()
-        return jsonify({'message': 'Vendor added successfully'}), 201
-    except exc.SQLAlchemyError as e:
-        db.session.rollback()
-        return jsonify({'error': str(e.__cause__)}), 500
-
-@app.put('/vendors/<int:vendor_id>')
-def update_vendor(vendor_id):
-    try:
-        request_data = request.get_json()
-        vendor = db.session.query(Vendors).get(vendor_id)
+    @api.doc('delete_vendor')
+    def delete(self, vendor_id):
+        vendor = Vendors.query.get(vendor_id)
         if vendor:
-            vendor.vendor_name = request_data['vendor_name']
-            vendor.vendor_address1 = request_data['vendor_address1']
-            vendor.vendor_address2 = request_data.get('vendor_address2')
-            vendor.vendor_city = request_data['vendor_city']
-            vendor.vendor_state = request_data['vendor_state']
-            vendor.vendor_zip_code = request_data['vendor_zip_code']
-            vendor.vendor_phone = request_data.get('vendor_phone')
-            vendor.vendor_contact_last_name = request_data.get('vendor_contact_last_name')
-            vendor.vendor_contact_first_name = request_data.get('vendor_contact_first_name')
-            vendor.default_terms_id = request_data['default_terms_id']
-            vendor.default_account_number = request_data['default_account_number']
+            db.session.delete(vendor)
             db.session.commit()
-            return jsonify({'message': 'Vendor updated successfully'})
-        else:
-            return jsonify({'message': 'Vendor not found'}), 404
-    except exc.SQLAlchemyError as e:
-        db.session.rollback()
-        return jsonify({'error': str(e.__cause__)}), 500
-@app.delete('/vendors/<int:vendor_id>')
-
-def delete_vendor(vendor_id):
-    vendor = db.session.query(Vendors).get(vendor_id)
-    if vendor:
-        db.session.delete(vendor)
-        db.session.commit()
-        return jsonify({'message': 'Vendor deleted successfully'})
-    else:
-        return jsonify({'message': 'Vendor not found'}), 404
+            return {'message': 'Vendor deleted successfully'}
+        return {'message': 'Vendor not found'}, 404
 
 if __name__ == '__main__':
     app.run(debug=True)
